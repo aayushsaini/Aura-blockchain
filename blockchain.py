@@ -6,6 +6,10 @@ from textwrap import dedent
 
 from flask import Flask, jsonify, request
 
+from urllib.parse import urlparse
+import requests
+
+
 class BlockChain(object):
     def __init__(self):
         self.chain = []
@@ -13,6 +17,9 @@ class BlockChain(object):
 
         #Create Genesis
         self.newBlock(previousHash=1, proof=100)
+
+        #Nodes set
+        self.nodes = set()
 
     
     def newBlock(self, proof, previousHash=None):
@@ -99,6 +106,76 @@ class BlockChain(object):
         #Returns the last block in the chain
         return self.chain[-1]
 
+    def registerNode(self, address):
+        """
+        Add a new node to the list of the nodes
+            :param address: <str> Address of the node. Eg. 192.127.0.1:5000
+            :return: None
+        """
+        parsedUrl = urlparse(address)
+        self.nodes.add(parsedUrl.netloc)
+
+    def validChain(self, chain):
+        """
+        Determine if the given blockchain is valid or not
+            :param chain: <list> A Blockchain
+            :return: <bool> True/False about the chain validity
+        """
+        lastBlock = chain[0]
+        currentIndex = 1
+        
+        while currentIndex < len(self.chain):
+            block = chain[currentIndex]
+            print(f'{lastBlock}')
+            print(f'{block}')
+            print("\n-----------\n")
+            
+            #Check if the hash of the block is correct
+            if (block['previousHash'] != self.hash(lastBlock)):
+                return False
+            
+            #Check if the PoW of the block is correct
+            if (not self.validProof(lastBlock['proof'], block['proof'])):
+                return False
+            
+            lastBlock = block
+            currentIndex+=1
+
+        return True
+
+    def resolveConflicts(self):
+        """
+        Consensus Algorithm: Resolves conflict when nodes show different chain by selecting
+        and replacing the chains with the longest verified chain in the network.
+        :return: <bool> True if the chain was replaced else False 
+        """
+
+        neighbours = self.nodes
+        newChain = None
+
+        #Find chain the longest chain
+        maxLength = len(self.chain)
+
+        #Iterate & verify all the chains from all the nodes in our network
+        for node in neighbours:
+            response = requests.get(f'http://{node}/chain')
+            if (response.status_code == 200):
+                length = response.json()['length']
+                chain = response.json()['chain']
+
+                #Check if the length is longer and the chain is valid
+                if (length > maxLength and self.validChain(chain)):
+                    maxLength = length
+                    newChain = chain
+        
+        #Replace our chain if we find a valid longer chain than ours
+        if newChain:
+            self.chain = newChain
+            return True
+        
+        return False
+
+
 
 #Instantiate our Node
 app = Flask(__name__)
@@ -111,7 +188,7 @@ blockchain = BlockChain()
 
 @app.route('/')
 def index():
-    return 'Aura Blockchain'
+    return '<center><h1>Aura Blockchain<h1></center>'
 
 @app.route('/mine', methods=['GET'])
 def mine():
@@ -157,6 +234,51 @@ def newTransaction():
     response = {'message': f'Transaction will be added to the Block{index}'}
 
     return jsonify(response), 201
+
+@app.route('/nodes/register', methods=['POST'])
+def registerNodes():
+    values = request.get_json()
+    nodes = values.get('nodes')
+
+    if nodes is None:
+        return "Error: Please supply a valid list of nodes", 400
+
+    for node in nodes:
+        blockchain.registerNode(node)
+
+    response = {
+        'message': 'New nodes have been added',
+        'totalNodes': list(blockchain.nodes),
+    }
+
+    return jsonify(response), 200
+
+@app.route('/nodes/show', methods=['GET'])
+def showNodes():
+    response = {
+        'message': 'These are the current nodes:',
+        'totalNodes': list(blockchain.nodes),
+    }
+
+    return jsonify(response), 200
+
+
+@app.route('/nodes/resolve', methods=['GET'])
+def consensus():
+    replaced = blockchain.resolveConflicts()
+    
+    if replaced:
+        response = {
+            'message': 'Our Chain was replaced',
+            'new chain': blockchain.chain
+        }
+    else:
+        response = {
+            'message': 'Our chain is the Authoritative',
+            'chain': blockchain.chain
+        }
+    
+    return jsonify(response), 200
 
 @app.route('/chain', methods=['GET'])
 def fullChain():
