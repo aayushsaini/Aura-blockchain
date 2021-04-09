@@ -277,7 +277,7 @@ def consensus():
             'message': 'Our chain is the Authoritative',
             'chain': blockchain.chain
         }
-    
+  
     return jsonify(response), 200
 
 @app.route('/chain', methods=['GET'])
